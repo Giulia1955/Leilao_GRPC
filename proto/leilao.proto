@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package leilao;
+
+// Define o pacote Go gerado
+option go_package = "grpc-leilao-go/proto";
+
+service LeilaoService {
+  rpc ParticiparLeilao (stream MensagemLance) returns (stream AtualizacaoLeilao);
+}
+
+message MensagemLance {
+  string cliente_id = 1;
+  double valor = 2;
+}
+
+message AtualizacaoLeilao {
+  string maior_lanceador = 1;
+  double maior_valor = 2;
+  string mensagem = 3;
+}
