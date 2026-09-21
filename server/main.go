@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"time"
 
 	pb "grpc-leilao-go/proto"
 
@@ -18,14 +19,47 @@ type LeilaoServer struct {
 	maiorValor     float64
 	maiorLanceador string
 	clientes       map[pb.LeilaoService_ParticiparLeilaoServer]bool
+
+	// Controle de encerramento
+	timer     *time.Timer
+	encerrado bool
 }
 
 func newServer() *LeilaoServer {
-	return &LeilaoServer{
+	s := &LeilaoServer{
 		maiorValor:     0,
 		maiorLanceador: "Nenhum",
 		clientes:       make(map[pb.LeilaoService_ParticiparLeilaoServer]bool),
 	}
+
+	// Inicia um timer de 30 segundos ao criar o leilão
+	s.resetarTimer(30 * time.Second)
+	return s
+}
+
+func (s *LeilaoServer) resetarTimer(duracao time.Duration) {
+	if s.timer != nil {
+		s.timer.Stop()
+	}
+
+	s.timer = time.AfterFunc(duracao, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		s.encerrado = true
+		log.Printf("🏁 LEILÃO ENCERRADO! Vencedor: %s com R$ %.2f\n", s.maiorLanceador, s.maiorValor)
+
+		notificacaoFim := &pb.AtualizacaoLeilao{
+			MaiorLanceador: s.maiorLanceador,
+			MaiorValor:     s.maiorValor,
+			Mensagem:       fmt.Sprintf("LEILÃO ENCERRADO! Vencedor: %s!", s.maiorLanceador),
+		}
+
+		// Notifica todos os clientes
+		for clienteStream := range s.clientes {
+			_ = clienteStream.Send(notificacaoFim)
+		}
+	})
 }
 
 func (s *LeilaoServer) ParticiparLeilao(stream pb.LeilaoService_ParticiparLeilaoServer) error {
@@ -33,14 +67,21 @@ func (s *LeilaoServer) ParticiparLeilao(stream pb.LeilaoService_ParticiparLeilao
 	s.clientes[stream] = true
 	maiorVal := s.maiorValor
 	maiorLanc := s.maiorLanceador
+	leilaoEncerrado := s.encerrado
 	s.mu.Unlock()
 
 	log.Println("⚡ Novo cliente se conectou!")
 
+	// Mensagem de boas-vindas informando o estado atual
+	msgBoasVindas := "Bem-vindo ao Leilão!"
+	if leilaoEncerrado {
+		msgBoasVindas = "O leilão já se encontra encerrado."
+	}
+
 	stream.Send(&pb.AtualizacaoLeilao{
 		MaiorLanceador: maiorLanc,
 		MaiorValor:     maiorVal,
-		Mensagem:       "Bem-vindo ao Leilão!",
+		Mensagem:       msgBoasVindas,
 	})
 
 	defer func() {
@@ -62,10 +103,25 @@ func (s *LeilaoServer) ParticiparLeilao(stream pb.LeilaoService_ParticiparLeilao
 		log.Printf("[LANCE RECEBIDO] %s ofertou R$ %.2f\n", lance.ClienteId, lance.Valor)
 
 		s.mu.Lock()
+		// 1. Verifica se o leilão já encerrou
+		if s.encerrado {
+			stream.Send(&pb.AtualizacaoLeilao{
+				MaiorLanceador: s.maiorLanceador,
+				MaiorValor:     s.maiorValor,
+				Mensagem:       "O leilão já foi encerrado! Lances não são mais aceitos.",
+			})
+			s.mu.Unlock()
+			continue
+		}
+
+		// 2. Valida se o lance é maior do que o atual
 		if lance.Valor > s.maiorValor {
 			s.maiorValor = lance.Valor
 			s.maiorLanceador = lance.ClienteId
 			log.Printf("🏆 NOVO MAIOR LANCE: R$ %.2f por %s\n", s.maiorValor, s.maiorLanceador)
+
+			// Reinicia o tempo restante (+30s) após um lance válido
+			s.resetarTimer(30 * time.Second)
 
 			notificacao := &pb.AtualizacaoLeilao{
 				MaiorLanceador: s.maiorLanceador,
@@ -77,6 +133,7 @@ func (s *LeilaoServer) ParticiparLeilao(stream pb.LeilaoService_ParticiparLeilao
 				_ = clienteStream.Send(notificacao)
 			}
 		} else {
+			// Responde apenas ao cliente sobre a recusa
 			stream.Send(&pb.AtualizacaoLeilao{
 				MaiorLanceador: s.maiorLanceador,
 				MaiorValor:     s.maiorValor,
