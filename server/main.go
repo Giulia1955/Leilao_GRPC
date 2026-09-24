@@ -19,8 +19,6 @@ type LeilaoServer struct {
 	maiorValor     float64
 	maiorLanceador string
 	clientes       map[pb.LeilaoService_ParticiparLeilaoServer]bool
-
-	// Controle de encerramento
 	timer     *time.Timer
 	encerrado bool
 }
@@ -32,8 +30,7 @@ func newServer() *LeilaoServer {
 		clientes:       make(map[pb.LeilaoService_ParticiparLeilaoServer]bool),
 	}
 
-	// Inicia um timer de 30 segundos ao criar o leilão
-	s.resetarTimer(30 * time.Second)
+	s.resetarTimer(150 * time.Second)
 	return s
 }
 
@@ -47,7 +44,7 @@ func (s *LeilaoServer) resetarTimer(duracao time.Duration) {
 		defer s.mu.Unlock()
 
 		s.encerrado = true
-		log.Printf("🏁 LEILÃO ENCERRADO! Vencedor: %s com R$ %.2f\n", s.maiorLanceador, s.maiorValor)
+		log.Printf("LEILÃO ENCERRADO! Vencedor: %s com R$ %.2f\n", s.maiorLanceador, s.maiorValor)
 
 		notificacaoFim := &pb.AtualizacaoLeilao{
 			MaiorLanceador: s.maiorLanceador,
@@ -55,7 +52,6 @@ func (s *LeilaoServer) resetarTimer(duracao time.Duration) {
 			Mensagem:       fmt.Sprintf("LEILÃO ENCERRADO! Vencedor: %s!", s.maiorLanceador),
 		}
 
-		// Notifica todos os clientes
 		for clienteStream := range s.clientes {
 			_ = clienteStream.Send(notificacaoFim)
 		}
@@ -72,7 +68,6 @@ func (s *LeilaoServer) ParticiparLeilao(stream pb.LeilaoService_ParticiparLeilao
 
 	log.Println("⚡ Novo cliente se conectou!")
 
-	// Mensagem de boas-vindas informando o estado atual
 	msgBoasVindas := "Bem-vindo ao Leilão!"
 	if leilaoEncerrado {
 		msgBoasVindas = "O leilão já se encontra encerrado."
@@ -88,7 +83,7 @@ func (s *LeilaoServer) ParticiparLeilao(stream pb.LeilaoService_ParticiparLeilao
 		s.mu.Lock()
 		delete(s.clientes, stream)
 		s.mu.Unlock()
-		log.Println("🔴 Cliente desconectado.")
+		log.Println("Cliente desconectado.")
 	}()
 
 	for {
@@ -103,7 +98,6 @@ func (s *LeilaoServer) ParticiparLeilao(stream pb.LeilaoService_ParticiparLeilao
 		log.Printf("[LANCE RECEBIDO] %s ofertou R$ %.2f\n", lance.ClienteId, lance.Valor)
 
 		s.mu.Lock()
-		// 1. Verifica se o leilão já encerrou
 		if s.encerrado {
 			stream.Send(&pb.AtualizacaoLeilao{
 				MaiorLanceador: s.maiorLanceador,
@@ -114,13 +108,11 @@ func (s *LeilaoServer) ParticiparLeilao(stream pb.LeilaoService_ParticiparLeilao
 			continue
 		}
 
-		// 2. Valida se o lance é maior do que o atual
 		if lance.Valor > s.maiorValor {
 			s.maiorValor = lance.Valor
 			s.maiorLanceador = lance.ClienteId
-			log.Printf("🏆 NOVO MAIOR LANCE: R$ %.2f por %s\n", s.maiorValor, s.maiorLanceador)
+			log.Printf("NOVO MAIOR LANCE: R$ %.2f por %s\n", s.maiorValor, s.maiorLanceador)
 
-			// Reinicia o tempo restante (+30s) após um lance válido
 			s.resetarTimer(30 * time.Second)
 
 			notificacao := &pb.AtualizacaoLeilao{
@@ -133,7 +125,6 @@ func (s *LeilaoServer) ParticiparLeilao(stream pb.LeilaoService_ParticiparLeilao
 				_ = clienteStream.Send(notificacao)
 			}
 		} else {
-			// Responde apenas ao cliente sobre a recusa
 			stream.Send(&pb.AtualizacaoLeilao{
 				MaiorLanceador: s.maiorLanceador,
 				MaiorValor:     s.maiorValor,

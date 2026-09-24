@@ -2,7 +2,6 @@ syntax = "proto3";
 
 package leilao;
 
-// Define o pacote Go gerado
 option go_package = "grpc-leilao-go/proto";
 
 service LeilaoService {
